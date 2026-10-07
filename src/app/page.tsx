@@ -2,14 +2,28 @@
 import { useState } from "react";
 import InputForm from "@/components/InputForm";
 import PipelineProgress, { type StageStatus } from "@/components/PipelineProgress";
-import { STAGES, type SSEEvent, type Stage } from "@/lib/types";
+import ClaimCard from "@/components/ClaimCard";
+import { STAGES, type Claim, type Source, type SSEEvent, type Stage } from "@/lib/types";
+
+type ArticleMeta = {
+  title: string | null;
+  outlet: string | null;
+  author: string | null;
+  publishDate: string | null;
+  url: string | null;
+  chars: number;
+};
 
 const idle = () =>
   Object.fromEntries(STAGES.map((s) => [s, "idle"])) as Record<Stage, StageStatus>;
 
 export default function Home() {
   const [statuses, setStatuses] = useState<Record<Stage, StageStatus>>(idle());
-  const [payloads, setPayloads] = useState<Partial<Record<Stage, unknown>>>({});
+  const [mode, setMode] = useState<"url" | "text" | null>(null);
+  const [article, setArticle] = useState<ArticleMeta | null>(null);
+  const [claims, setClaims] = useState<Claim[]>([]);
+  const [sources, setSources] = useState<Record<string, Source[]>>({});
+  const [warnings, setWarnings] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -17,16 +31,35 @@ export default function Home() {
     if (ev.type === "stage") {
       setStatuses((p) => ({ ...p, [ev.stage]: ev.status === "start" ? "active" : "done" }));
     } else if (ev.type === "data") {
-      setPayloads((p) => ({ ...p, [ev.stage]: ev.payload }));
+      const p = ev.payload as Record<string, unknown>;
+      if (ev.stage === "INGEST") {
+        setMode(p.mode as "url" | "text");
+        setArticle(p.article as ArticleMeta);
+      } else if (ev.stage === "EXTRACT") {
+        setClaims(p.claims as Claim[]);
+      } else if (ev.stage === "RETRIEVE") {
+        const id = p.claimId as string;
+        setSources((s) => ({ ...s, [id]: p.sources as Source[] }));
+        if (p.warning) setWarnings((w) => ({ ...w, [id]: p.warning as string }));
+      }
     } else {
       setError(ev.message);
+      setStatuses((p) =>
+        Object.fromEntries(
+          Object.entries(p).map(([k, v]) => [k, v === "active" ? "idle" : v])
+        ) as Record<Stage, StageStatus>
+      );
     }
   }
 
   async function run(input: string) {
     setLoading(true);
     setError(null);
-    setPayloads({});
+    setMode(null);
+    setArticle(null);
+    setClaims([]);
+    setSources({});
+    setWarnings({});
     setStatuses(idle());
     try {
       const res = await fetch("/api/verify", {
@@ -78,10 +111,39 @@ export default function Home() {
         </div>
       )}
 
-      {Object.keys(payloads).length > 0 && (
-        <pre className="overflow-x-auto rounded-lg border border-zinc-800 bg-zinc-900 p-4 text-xs text-zinc-400">
-          {JSON.stringify(payloads, null, 2)}
-        </pre>
+      {mode && (
+        <section className="rounded-lg border border-zinc-800 bg-zinc-900/60 p-4 text-sm">
+          <p className="mb-1 text-xs uppercase tracking-wide text-zinc-500">
+            {mode === "url" ? "Source article" : "Submitted claim"}
+          </p>
+          {mode === "url" && article ? (
+            <>
+              <p className="font-medium text-zinc-100">{article.title ?? article.url}</p>
+              <p className="text-xs text-zinc-500">
+                {[article.outlet, article.publishDate, article.author].filter(Boolean).join(" · ")}
+              </p>
+            </>
+          ) : (
+            <p className="text-zinc-400">Analyzing submitted text as the origin.</p>
+          )}
+        </section>
+      )}
+
+      {claims.length > 0 && (
+        <section className="space-y-4">
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-400">
+            Claims ({claims.length})
+          </h2>
+          {claims.map((c, i) => (
+            <ClaimCard
+              key={c.id}
+              index={i}
+              claim={c}
+              sources={sources[c.id]}
+              warning={warnings[c.id]}
+            />
+          ))}
+        </section>
       )}
     </main>
   );
