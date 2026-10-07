@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { generateJson } from "@/lib/gemini";
+import { generateJson } from "@/lib/groq";
 import type { Claim, Entity, Source } from "@/lib/types";
 
 export type Article = {
@@ -11,8 +11,6 @@ export type Article = {
   text: string;
 };
 
-/* ───────── helpers ───────── */
-
 export const isUrl = (s: string) => /^https?:\/\/\S+$/i.test(s.trim());
 
 export function hostOf(url: string): string | null {
@@ -20,17 +18,6 @@ export function hostOf(url: string): string | null {
     return new URL(url).hostname.replace(/^www\./, "").toLowerCase();
   } catch {
     return null;
-  }
-}
-
-function sameUrl(a: string, b: string): boolean {
-  try {
-    const x = new URL(a);
-    const y = new URL(b);
-    const key = (u: URL) => (u.hostname.replace(/^www\./, "") + u.pathname.replace(/\/$/, "")).toLowerCase();
-    return key(x) === key(y);
-  } catch {
-    return false;
   }
 }
 
@@ -60,17 +47,6 @@ export async function mapPool<T>(items: T[], limit: number, fn: (item: T) => Pro
   );
 }
 
-/** Grounding URIs are Google redirect links; resolve to the real article URL. */
-async function resolveUrl(uri: string): Promise<string> {
-  if (!uri.includes("vertexaisearch.cloud.google.com")) return uri;
-  try {
-    const res = await fetch(uri, { redirect: "manual", signal: AbortSignal.timeout(5000) });
-    return res.headers.get("location") ?? uri;
-  } catch {
-    return uri;
-  }
-}
-
 /* ───────── INGEST ───────── */
 
 const IngestSchema = z.object({
@@ -80,6 +56,15 @@ const IngestSchema = z.object({
   publishDate: z.string().nullish(),
   text: z.string(),
 });
+
+async function fetchViaJina(url: string): Promise<string> {
+  const res = await fetch(`https://r.jina.ai/${url}`, {
+    headers: { Accept: "text/plain", "X-Return-Format": "text" },
+    signal: AbortSignal.timeout(15000),
+  });
+  if (!res.ok) throw new Error(`Jina fetch failed: ${res.status}`);
+  return res.text();
+}
 
 export async function ingest(input: string): Promise<{ mode: "url" | "text"; article: Article }> {
   const trimmed = input.trim();
@@ -91,18 +76,23 @@ export async function ingest(input: string): Promise<{ mode: "url" | "text"; art
     };
   }
 
-  const prompt = `Use the URL context tool to read this page: ${trimmed}
-
-Return ONLY a JSON object, no commentary:
-{"title": string|null, "outlet": "publisher domain e.g. reuters.com", "author": string|null, "publishDate": "YYYY-MM-DD or null", "text": "faithful condensed main body text of the article, max ~1200 words, no commentary"}
-
-Rules: never guess the date or author; use null if not stated on the page. If you cannot access the page, return {"title":null,"outlet":null,"author":null,"publishDate":null,"text":""}.`;
-
-  const { data } = await generateJson(prompt, IngestSchema, { tools: [{ urlContext: {} }] });
-
-  if (data.text.trim().length < 200) {
+  const raw = await fetchViaJina(trimmed);
+  if (raw.trim().length < 200) {
     throw new Error("Couldn't read that URL (paywalled or blocked). Paste the article text instead.");
   }
+
+  const body = raw.slice(0, 14000);
+  const prompt = `Extract metadata from this article text. Return ONLY JSON:
+{"title": string|null, "outlet": "publisher domain e.g. reuters.com", "author": string|null, "publishDate": "YYYY-MM-DD or null", "text": "faithful condensed main body, max 1200 words, no commentary"}
+
+Rules: never guess date or author; use null if not stated.
+
+ARTICLE:
+"""
+${body}
+"""`;
+
+  const data = await generateJson(prompt, IngestSchema);
 
   return {
     mode: "url",
@@ -112,7 +102,7 @@ Rules: never guess the date or author; use null if not stated on the page. If yo
       author: data.author ?? null,
       publishDate: normalizeDate(data.publishDate),
       url: trimmed,
-      text: data.text,
+      text: data.text?.trim().length > 200 ? data.text : raw.slice(0, 6000),
     },
   };
 }
@@ -135,12 +125,12 @@ export async function extractClaims(article: Article): Promise<Claim[]> {
   const prompt = `You are an OSINT analyst. Extract the central factual claims from the text below.
 
 Rules:
-- For a full article return 3 to 5 claims. If the text is itself a short claim, return just 1-2.
-- Each claim must be atomic, independently verifiable, and self-contained (resolve pronouns, name the actors).
+- Return 3 to 5 claims for a full article; 1-2 for a short claim.
+- Each claim must be atomic, independently verifiable, self-contained (resolve pronouns, name actors).
 - Factual assertions only; skip opinions and predictions.
-- entities: [{"name": string, "type": "person" | "org" | "location" | "other"}]
-- dates: dates/times referenced by the claim (ISO where possible).
-- locations: places referenced by the claim.
+- entities: [{"name": string, "type": "person"|"org"|"location"|"other"}]
+- dates: ISO dates referenced by the claim.
+- locations: places referenced.
 
 Return ONLY JSON: {"claims":[{"text":"...","entities":[...],"dates":[...],"locations":[...]}]}
 
@@ -149,7 +139,7 @@ TEXT:
 ${body}
 """`;
 
-  const { data } = await generateJson(prompt, ExtractSchema);
+  const data = await generateJson(prompt, ExtractSchema);
 
   const claims: Claim[] = data.claims
     .filter((c) => c.text.trim().length > 0)
@@ -166,109 +156,56 @@ ${body}
   return claims;
 }
 
-/* ───────── RETRIEVE ───────── */
+/* ───────── RETRIEVE (Tavily) ───────── */
 
-const RetrieveSchema = z.object({
-  sources: z.array(
-    z.object({
-      title: z.string().nullish(),
-      outlet: z.string().nullish(),
-      snippet: z.string().nullish(),
-      publishDate: z.string().nullish(),
-      author: z.string().nullish(),
-    })
-  ),
-});
+type TavilyResult = {
+  title: string;
+  url: string;
+  content: string;
+  published_date?: string;
+};
 
-type Candidate = { url: string; outlet: string; title: string };
+async function tavilySearch(query: string): Promise<TavilyResult[]> {
+  const apiKey = process.env.TAVILY_API_KEY;
+  if (!apiKey) throw new Error("TAVILY_API_KEY is not set in .env.local");
 
-export async function retrieveSources(claim: Claim, article: Article): Promise<Source[]> {
-  const ctx = [
-    article.title ? `Origin article: "${article.title}"${article.outlet ? ` (${article.outlet})` : ""}` : null,
-    claim.entities.length ? `Entities: ${claim.entities.map((e) => `${e.name} [${e.type}]`).join(", ")}` : null,
-    claim.locations.length ? `Locations: ${claim.locations.join(", ")}` : null,
-    claim.dates.length ? `Dates: ${claim.dates.join(", ")}` : null,
-  ]
-    .filter(Boolean)
-    .join("\n");
-
-  const prompt = `You are an OSINT analyst. Use Google Search to find independent public sources (news outlets, wire services, official statements, fact-checkers) that report on or bear on this claim.
-
-CLAIM: ${claim.text}
-${ctx}
-
-Rules:
-- Prefer original/primary reporting. Include sources that CONTRADICT the claim as well as ones that support it.
-- Only list pages you actually found through search. Never invent sources.
-- Max 8 sources.
-
-Return ONLY JSON:
-{"sources":[{"title":"article headline","outlet":"domain e.g. reuters.com","snippet":"1-2 neutral sentences on what this source says about the claim","publishDate":"YYYY-MM-DD or null","author":"name or null"}]}`;
-
-  const { data, raw } = await generateJson(prompt, RetrieveSchema, { tools: [{ googleSearch: {} }] });
-
-  // Real URLs come ONLY from grounding metadata, never from model text.
-  const chunks = raw.candidates?.[0]?.groundingMetadata?.groundingChunks ?? [];
-  const resolved = await Promise.all(
-    chunks.map(async (c): Promise<Candidate | null> => {
-      const uri = c.web?.uri;
-      if (!uri) return null;
-      const url = await resolveUrl(uri);
-      const host = hostOf(url);
-      const title = c.web?.title ?? "";
-      const outlet =
-        host && !host.includes("vertexaisearch") ? host : title.replace(/^www\./, "").toLowerCase();
-      return { url, outlet, title };
-    })
-  );
-
-  const seen = new Set<string>();
-  const pool: Candidate[] = [];
-  for (const c of resolved) {
-    if (!c || seen.has(c.url)) continue;
-    if (article.url && sameUrl(c.url, article.url)) continue; // origin article isn't independent
-    seen.add(c.url);
-    pool.push(c);
-  }
-
-  const used = new Set<number>();
-  const out: Omit<Source, "id">[] = [];
-
-  for (const m of data.sources) {
-    const o = (m.outlet ?? "").replace(/^www\./, "").toLowerCase();
-    if (!o) continue;
-    const idx = pool.findIndex(
-      (p, i) =>
-        !used.has(i) &&
-        p.outlet !== "" &&
-        (p.outlet === o || p.outlet.endsWith("." + o) || o.endsWith("." + p.outlet) || p.outlet.includes(o))
-    );
-    if (idx === -1) continue; // no grounding match → can't trust a URL → drop
-    used.add(idx);
-    const p = pool[idx];
-    out.push({
-      claimId: claim.id,
-      url: p.url,
-      title: m.title?.trim() || p.title || p.outlet,
-      outlet: p.outlet,
-      snippet: m.snippet ?? undefined,
-      publishDate: normalizeDate(m.publishDate),
-      author: m.author ?? null,
-    });
-  }
-
-  // Grounded sources the model didn't describe still count as real evidence
-  pool.forEach((p, i) => {
-    if (used.has(i)) return;
-    out.push({
-      claimId: claim.id,
-      url: p.url,
-      title: p.title || p.outlet,
-      outlet: p.outlet,
-      publishDate: null,
-      author: null,
-    });
+  const res = await fetch("https://api.tavily.com/search", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      api_key: apiKey,
+      query,
+      search_depth: "basic",
+      max_results: 8,
+      include_answer: false,
+    }),
+    signal: AbortSignal.timeout(15000),
   });
 
-  return out.slice(0, 8).map((s, i) => ({ ...s, id: `${claim.id}-s${i + 1}` }));
+  if (!res.ok) throw new Error(`Tavily search failed: ${res.status}`);
+  const json = await res.json() as { results: TavilyResult[] };
+  return json.results ?? [];
+}
+
+export async function retrieveSources(claim: Claim, article: Article): Promise<Source[]> {
+  const entityNames = claim.entities.slice(0, 3).map((e) => e.name).join(" ");
+  const query = `${claim.text.slice(0, 120)} ${entityNames}`.trim();
+
+  const results = await tavilySearch(query);
+
+  // Filter out origin article
+  const filtered = results.filter(
+    (r) => !article.url || !r.url.includes(new URL(article.url).hostname)
+  );
+
+  return filtered.slice(0, 8).map((r, i) => ({
+    id: `${claim.id}-s${i + 1}`,
+    claimId: claim.id,
+    url: r.url,
+    title: r.title || hostOf(r.url) || r.url,
+    outlet: hostOf(r.url) ?? r.url,
+    snippet: r.content?.slice(0, 300) || undefined,
+    publishDate: normalizeDate(r.published_date),
+    author: null,
+  }));
 }

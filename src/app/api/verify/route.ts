@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { VerifyRequestSchema, type SSEEvent, type Stage } from "@/lib/types";
 import { ingest, extractClaims, retrieveSources, mapPool } from "@/lib/pipeline";
-import { friendlyError } from "@/lib/gemini";
+import { friendlyError } from "@/lib/groq";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
