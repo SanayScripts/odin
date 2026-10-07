@@ -3,6 +3,9 @@ import { useState } from "react";
 import InputForm from "@/components/InputForm";
 import PipelineProgress, { type StageStatus } from "@/components/PipelineProgress";
 import ClaimCard from "@/components/ClaimCard";
+import VerdictPanel from "@/components/VerdictPanel";
+import NarrativeView from "@/components/NarrativeView";
+import Timeline from "@/components/Timeline";
 import { STAGES, type Claim, type Source, type ClaimResult, type Verdict, type SSEEvent, type Stage } from "@/lib/types";
 
 type ArticleMeta = { title: string | null; outlet: string | null; author: string | null; publishDate: string | null; url: string | null; chars: number };
@@ -15,10 +18,11 @@ export default function Home() {
   const [claims, setClaims] = useState<Claim[]>([]);
   const [sources, setSources] = useState<Record<string, Source[]>>({});
   const [warnings, setWarnings] = useState<Record<string, string>>({});
-  const [results, setResults] = useState<Record<string, ClaimResult>>({});
+  const [results, setResults] = useState<ClaimResult[]>([]);
   const [overall, setOverall] = useState<{ verdict: Verdict; confidence: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [activeTab, setActiveTab] = useState<"claims" | "narrative" | "timeline">("claims");
 
   function handle(ev: SSEEvent) {
     if (ev.type === "stage") {
@@ -42,8 +46,7 @@ export default function Home() {
           return m;
         });
       } else if (ev.stage === "SCORE") {
-        const rs = p.results as ClaimResult[];
-        setResults(Object.fromEntries(rs.map((r) => [r.claimId, r])));
+        setResults(p.results as ClaimResult[]);
         setOverall({ verdict: p.overall as Verdict, confidence: p.overallConfidence as number });
       }
     } else {
@@ -54,8 +57,8 @@ export default function Home() {
 
   async function run(input: string) {
     setLoading(true); setError(null); setMode(null); setArticle(null);
-    setClaims([]); setSources({}); setWarnings({}); setResults({}); setOverall(null);
-    setStatuses(idle());
+    setClaims([]); setSources({}); setWarnings({}); setResults([]); setOverall(null);
+    setStatuses(idle()); setActiveTab("claims");
     try {
       const res = await fetch("/api/verify", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ input }) });
       if (!res.ok || !res.body) { const j = await res.json().catch(() => ({})); throw new Error(j.error ?? `Request failed (${res.status})`); }
@@ -74,16 +77,10 @@ export default function Home() {
     finally { setLoading(false); }
   }
 
-  const VERDICT_STYLE: Record<Verdict, string> = {
-    supported: "border-emerald-700 bg-emerald-950 text-emerald-300",
-    contested: "border-red-700 bg-red-950 text-red-300",
-    insufficient: "border-zinc-600 bg-zinc-900 text-zinc-400",
-  };
-  const VERDICT_LABEL: Record<Verdict, string> = {
-    supported: "✓ Supported",
-    contested: "✗ Contested",
-    insufficient: "? Insufficient Evidence",
-  };
+  const allSources = Object.values(sources).flat();
+  const resultMap = Object.fromEntries(results.map((r) => [r.claimId, r]));
+  const TABS = ["claims", "narrative", "timeline"] as const;
+  const TAB_LABEL: Record<typeof TABS[number], string> = { claims: "Claims", narrative: "Narrative", timeline: "Timeline" };
 
   return (
     <main className="mx-auto max-w-4xl space-y-8 px-6 py-12">
@@ -97,31 +94,43 @@ export default function Home() {
 
       {error && <div className="rounded-lg border border-red-900 bg-red-950 p-4 text-sm text-red-300">{error}</div>}
 
-      {overall && (
-        <div className={`rounded-xl border p-5 ${VERDICT_STYLE[overall.verdict]}`}>
-          <p className="text-xs uppercase tracking-wide opacity-60 mb-1">Overall verdict</p>
-          <p className="text-xl font-bold">{VERDICT_LABEL[overall.verdict]}</p>
-          <p className="text-xs mt-1 opacity-70">Confidence: {Math.round(overall.confidence * 100)}%</p>
-        </div>
-      )}
+      {overall && <VerdictPanel overall={overall.verdict} confidence={overall.confidence} results={results} />}
 
       {mode && (
         <section className="rounded-lg border border-zinc-800 bg-zinc-900/60 p-4 text-sm">
           <p className="mb-1 text-xs uppercase tracking-wide text-zinc-500">{mode === "url" ? "Source article" : "Submitted claim"}</p>
-          {mode === "url" && article ? (
-            <><p className="font-medium text-zinc-100">{article.title ?? article.url}</p><p className="text-xs text-zinc-500">{[article.outlet, article.publishDate, article.author].filter(Boolean).join(" · ")}</p></>
-          ) : (
-            <p className="text-zinc-400">Analyzing submitted text as the origin.</p>
-          )}
+          {mode === "url" && article
+            ? <><p className="font-medium text-zinc-100">{article.title ?? article.url}</p><p className="text-xs text-zinc-500">{[article.outlet, article.publishDate, article.author].filter(Boolean).join(" · ")}</p></>
+            : <p className="text-zinc-400">Analyzing submitted text as the origin.</p>}
         </section>
       )}
 
       {claims.length > 0 && (
         <section className="space-y-4">
-          <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-400">Claims ({claims.length})</h2>
-          {claims.map((c, i) => (
-            <ClaimCard key={c.id} index={i} claim={c} sources={sources[c.id]} warning={warnings[c.id]} result={results[c.id]} />
-          ))}
+          <div className="flex gap-2">
+            {TABS.map((t) => (
+              <button key={t} onClick={() => setActiveTab(t)}
+                className={`rounded-lg px-4 py-1.5 text-xs font-semibold transition ${activeTab === t ? "bg-amber-500 text-zinc-950" : "bg-zinc-800 text-zinc-400 hover:text-zinc-200"}`}>
+                {TAB_LABEL[t]}
+              </button>
+            ))}
+          </div>
+
+          {activeTab === "claims" && (
+            <div className="space-y-4">
+              {claims.map((c, i) => (
+                <ClaimCard key={c.id} index={i} claim={c} sources={sources[c.id]} warning={warnings[c.id]} result={resultMap[c.id]} />
+              ))}
+            </div>
+          )}
+
+          {activeTab === "narrative" && allSources.length > 0 && (
+            <NarrativeView sources={allSources} />
+          )}
+
+          {activeTab === "timeline" && (
+            <Timeline sources={allSources} />
+          )}
         </section>
       )}
     </main>
