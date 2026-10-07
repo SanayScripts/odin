@@ -1,7 +1,7 @@
 import Groq from "groq-sdk";
 import type { z } from "zod";
 
-export const MODEL = "llama-3.3-70b-versatile";
+export const MODEL = "openai/gpt-oss-20b";
 
 let client: Groq | null = null;
 

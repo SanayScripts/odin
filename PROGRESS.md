@@ -30,3 +30,11 @@
 - [x] `retrieveSources`: Tavily Search API — real URLs
 - [x] route.ts: import updated to groq.ts
 - [ ] BLOCKED: llama-3.3-70b-versatile not found — need to swap model name
+
+## Batch 2c ✅ Model fix + debug session
+- [x] Swapped model to openai/gpt-oss-20b (llama-3.3-70b-versatile not available on free tier)
+- [x] Confirmed route.ts, page.tsx, InputForm.tsx all correct
+- [x] Pipeline wired: INGEST → EXTRACT → RETRIEVE → stubs for CLASSIFY/PROVENANCE/SCORE/DONE
+- [ ] Button unresponsive in Firefox (HMR WebSocket failures, Security Error on file:/// links)
+- [ ] Not yet tested end-to-end — needs Chrome or Chromium to verify
+- [ ] Batch 3 not started: credibility.ts, classify, provenance.ts, geo.ts, scoring.ts
