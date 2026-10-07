@@ -38,3 +38,30 @@
 - [ ] Button unresponsive in Firefox (HMR WebSocket failures, Security Error on file:/// links)
 - [ ] Not yet tested end-to-end — needs Chrome or Chromium to verify
 - [ ] Batch 3 not started: credibility.ts, classify, provenance.ts, geo.ts, scoring.ts
+
+## Batch 3 ✅ OSINT Analysis
+- [x] `credibility.ts`: tier map (40+ domains), `getTier()`, `detectOutletBias()`
+- [x] `provenance.ts`: earliest-date original tagging, citation chain detection, `buildCitationEdges()`
+- [x] `geo.ts`: location consistency flag via snippet/title string match
+- [x] `scoring.ts`: per-claim weighted scoring, `scoreCliam()`, `aggregateVerdict()`
+- [x] `pipeline.ts`: `classifySources()` added — per-claim batched stance classification via Groq
+- [x] `route.ts`: CLASSIFY → PROVENANCE → SCORE → DONE fully wired, stubs replaced
+- [x] `page.tsx`: handles CLASSIFY/PROVENANCE/SCORE SSE events, overall verdict banner
+- [x] `ClaimCard.tsx`: verdict badge, support/conflict scores, sources grouped by stance, tier/original/geo badges
+- [x] `gemini.ts` deleted (dead file, caused tsc errors)
+- Note: geo mismatch is snippet-level string match only, not NER
+- Note: `scoreCliam` typo is consistent across scoring.ts and route.ts
+
+## Batch 4 ✅ Visualization UI
+- [x] `VerdictPanel`: overall verdict banner + confidence bar + per-claim breakdown table
+- [x] `SourceCard`: tier badge, stance badge, original/secondary/geo tags, snippet
+- [x] `NarrativeView`: three-column supporting/conflicting/neutral layout using SourceCard
+- [x] `Timeline`: date-sorted vertical timeline with stance dots, lead/lag labels
+- [x] `page.tsx`: tabbed results view (Claims / Narrative / Timeline), wired all new components
+
+## Batch 5 ✅ Polish & Export
+- [x] `report.ts`: Markdown report generator (verdict, per-claim breakdown, grouped sources)
+- [x] Copy report + Download .md buttons (shown after pipeline completes)
+- [x] Footer disclaimer
+- [x] `README.md`: setup, usage, scoring formula
+- [x] Error display with label

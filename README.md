@@ -1,36 +1,55 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Odin
 
-## Getting Started
+OSINT news verification tool. Submit a news URL or a plain-text claim; Odin extracts atomic claims, retrieves independent sources, classifies stance, traces provenance, and produces a corroboration-based verdict.
 
-First, run the development server:
+## Stack
+
+- Next.js 14+ (App Router), TypeScript, Tailwind CSS
+- Groq (`openai/gpt-oss-20b`) — claim extraction + stance classification
+- Tavily Search API — source retrieval
+- Jina Reader (`r.jina.ai`) — article ingestion
+
+## Setup
+
+```bash
+npm install
+```
+
+Create `.env.local`:
+
+```
+GROQ_API_KEY=your_key
+TAVILY_API_KEY=your_key
+```
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open `http://localhost:3000`.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Usage
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+- **URL input:** paste any news article URL. Jina fetches the text; Groq extracts claims.
+- **Text input:** paste a claim directly (min 8 chars).
 
-## Learn More
+Pipeline: Ingest → Extract claims → Retrieve sources → Classify stance → Trace provenance → Score & verdict.
 
-To learn more about Next.js, take a look at the following resources:
+## Scoring
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Per-source weight = `(tier/5) × stanceConfidence × independenceFactor`  
+`independenceFactor`: 1 for chain root, 0.25 for secondary in same citation chain.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Per-claim verdict:
+- `< 2` independent chains → **Insufficient Evidence**
+- support ratio ≥ 0.65 → **Supported**
+- support ratio ≤ 0.35 → **Contested (leaning false)**
+- otherwise → **Contested**
 
-## Deploy on Vercel
+Overall = worst-case across claims.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Notes
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- Free-tier Groq rate limits apply; large articles with many claims may be slow.
+- Geo mismatch is snippet-level string match, not NER.
+- Source dates and authors are model-reported from Tavily snippets, not verified.

@@ -6,6 +6,7 @@ import ClaimCard from "@/components/ClaimCard";
 import VerdictPanel from "@/components/VerdictPanel";
 import NarrativeView from "@/components/NarrativeView";
 import Timeline from "@/components/Timeline";
+import { generateMarkdownReport } from "@/lib/report";
 import { STAGES, type Claim, type Source, type ClaimResult, type Verdict, type SSEEvent, type Stage } from "@/lib/types";
 
 type ArticleMeta = { title: string | null; outlet: string | null; author: string | null; publishDate: string | null; url: string | null; chars: number };
@@ -23,6 +24,8 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<"claims" | "narrative" | "timeline">("claims");
+  const [input, setInput] = useState("");
+  const [copied, setCopied] = useState(false);
 
   function handle(ev: SSEEvent) {
     if (ev.type === "stage") {
@@ -55,20 +58,21 @@ export default function Home() {
     }
   }
 
-  async function run(input: string) {
+  async function run(value: string) {
+    setInput(value);
     setLoading(true); setError(null); setMode(null); setArticle(null);
     setClaims([]); setSources({}); setWarnings({}); setResults([]); setOverall(null);
-    setStatuses(idle()); setActiveTab("claims");
+    setStatuses(idle()); setActiveTab("claims"); setCopied(false);
     try {
-      const res = await fetch("/api/verify", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ input }) });
+      const res = await fetch("/api/verify", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ input: value }) });
       if (!res.ok || !res.body) { const j = await res.json().catch(() => ({})); throw new Error(j.error ?? `Request failed (${res.status})`); }
       const reader = res.body.getReader();
       const dec = new TextDecoder();
       let buf = "";
       while (true) {
-        const { done, value } = await reader.read();
+        const { done, value: chunk } = await reader.read();
         if (done) break;
-        buf += dec.decode(value, { stream: true });
+        buf += dec.decode(chunk, { stream: true });
         const parts = buf.split("\n\n");
         buf = parts.pop() ?? "";
         for (const part of parts) { if (part.startsWith("data: ")) handle(JSON.parse(part.slice(6)) as SSEEvent); }
@@ -81,6 +85,24 @@ export default function Home() {
   const resultMap = Object.fromEntries(results.map((r) => [r.claimId, r]));
   const TABS = ["claims", "narrative", "timeline"] as const;
   const TAB_LABEL: Record<typeof TABS[number], string> = { claims: "Claims", narrative: "Narrative", timeline: "Timeline" };
+  const isDone = statuses["DONE"] === "done";
+
+  function handleExport() {
+    if (!overall) return;
+    const md = generateMarkdownReport({ input, claims, sources: allSources, results, overall: overall.verdict, overallConfidence: overall.confidence });
+    const blob = new Blob([md], { type: "text/markdown" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href = url; a.download = "odin-report.md"; a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  async function handleCopy() {
+    if (!overall) return;
+    const md = generateMarkdownReport({ input, claims, sources: allSources, results, overall: overall.verdict, overallConfidence: overall.confidence });
+    await navigator.clipboard.writeText(md);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  }
 
   return (
     <main className="mx-auto max-w-4xl space-y-8 px-6 py-12">
@@ -92,9 +114,25 @@ export default function Home() {
       <InputForm onSubmit={run} loading={loading} />
       <PipelineProgress statuses={statuses} />
 
-      {error && <div className="rounded-lg border border-red-900 bg-red-950 p-4 text-sm text-red-300">{error}</div>}
+      {error && (
+        <div className="rounded-lg border border-red-900 bg-red-950 p-4 text-sm text-red-300 space-y-1">
+          <p className="font-semibold">Error</p>
+          <p>{error}</p>
+        </div>
+      )}
 
       {overall && <VerdictPanel overall={overall.verdict} confidence={overall.confidence} results={results} />}
+
+      {isDone && overall && (
+        <div className="flex gap-2">
+          <button onClick={handleCopy} className="rounded-lg border border-zinc-700 bg-zinc-800 px-4 py-2 text-xs font-semibold text-zinc-300 hover:text-zinc-100 transition">
+            {copied ? "Copied!" : "Copy report"}
+          </button>
+          <button onClick={handleExport} className="rounded-lg border border-zinc-700 bg-zinc-800 px-4 py-2 text-xs font-semibold text-zinc-300 hover:text-zinc-100 transition">
+            Download .md
+          </button>
+        </div>
+      )}
 
       {mode && (
         <section className="rounded-lg border border-zinc-800 bg-zinc-900/60 p-4 text-sm">
@@ -123,16 +161,14 @@ export default function Home() {
               ))}
             </div>
           )}
-
-          {activeTab === "narrative" && allSources.length > 0 && (
-            <NarrativeView sources={allSources} />
-          )}
-
-          {activeTab === "timeline" && (
-            <Timeline sources={allSources} />
-          )}
+          {activeTab === "narrative" && <NarrativeView sources={allSources} />}
+          {activeTab === "timeline" && <Timeline sources={allSources} />}
         </section>
       )}
+
+      <footer className="border-t border-zinc-800 pt-6 text-xs text-zinc-600">
+        Odin provides automated OSINT analysis. Results may be incomplete or incorrect — verify independently before acting on any finding.
+      </footer>
     </main>
   );
 }
