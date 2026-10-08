@@ -1,5 +1,8 @@
 import type { Source, ClaimResult, Verdict } from "@/lib/types";
 
+// Total weight at which evidence counts as "full". Tune here.
+const EVIDENCE_SATURATION = 1.5;
+
 function tierWeight(tier: number): number {
   return tier / 5;
 }
@@ -39,17 +42,18 @@ export function scoreCliam(claimId: string, sources: Source[]): ClaimResult {
   let verdict: Verdict;
   let confidence: number;
 
-  if (independentChains < 2) {
-    verdict = "insufficient";
-    confidence = 0.3;
-  } else if (total === 0) {
+  if (independentChains < 2 || total === 0) {
     verdict = "insufficient";
     confidence = 0.3;
   } else {
     const ratio = support / total;
-    confidence = Math.abs(ratio - 0.5) * 2; // 0 at 50/50, 1 at all-one-side
+    // Direction: 0 at a 50/50 split, 1 when all weight sits on one side.
+    const directional = Math.abs(ratio - 0.5) * 2;
+    // Volume: little evidence caps confidence, so a single weak source can't read as certain.
+    const volume = Math.min(1, total / EVIDENCE_SATURATION);
+    confidence = Math.round(directional * volume * 100) / 100;
+
     if (ratio >= 0.65) verdict = "supported";
-    else if (ratio <= 0.35) verdict = "contested";
     else verdict = "contested";
   }
 
