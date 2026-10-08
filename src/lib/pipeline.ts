@@ -162,7 +162,7 @@ async function tavilySearch(query: string): Promise<TavilyResult[]> {
   const res = await fetch("https://api.tavily.com/search", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ api_key: apiKey, query, search_depth: "basic", max_results: 8, include_answer: false }),
+    body: JSON.stringify({ api_key: apiKey, query, search_depth: "advanced", max_results: 8, include_answer: false }),
     signal: AbortSignal.timeout(15000),
   });
   if (!res.ok) throw new Error(`Tavily search failed: ${res.status}`);
@@ -183,7 +183,7 @@ export async function retrieveSources(claim: Claim, article: Article): Promise<S
     url: r.url,
     title: r.title || hostOf(r.url) || r.url,
     outlet: hostOf(r.url) ?? r.url,
-    snippet: r.content?.slice(0, 300) || undefined,
+    snippet: r.content?.slice(0, 1200) || undefined,
     publishDate: normalizeDate(r.published_date),
     author: null,
     tier: getTier(hostOf(r.url) ?? r.url),
