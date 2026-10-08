@@ -9,21 +9,31 @@ function hasCitationSignal(snippet: string): boolean {
   return CITATION_PATTERNS.some((re) => re.test(snippet));
 }
 
-const norm = (s: string) =>
-  s.toLowerCase().replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
+const STOP = new Set(["the", "a", "an", "of", "in", "on", "to", "and", "for", "is", "was", "by", "at", "with"]);
 
-// Syndication fingerprint: first 80 normalized chars of the snippet.
-// Short snippets (<40 chars) are too weak to call a copy, so they return null.
-function fingerprint(s: Source): string | null {
-  const fp = norm(s.snippet ?? "").slice(0, 80);
-  return fp.length >= 40 ? fp : null;
+// Normalized title tokens, minus stopwords. Two titles "match" when they share
+// at least 70% of their tokens (Jaccard-style on the smaller set).
+function titleTokens(s: Source): Set<string> {
+  const words = (s.title ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]+/g, " ")
+    .split(/\s+/)
+    .filter((w) => w.length > 1 && !STOP.has(w));
+  return new Set(words);
+}
+
+function sameStory(a: Set<string>, b: Set<string>): boolean {
+  if (a.size < 3 || b.size < 3) return false;
+  let shared = 0;
+  for (const t of a) if (b.has(t)) shared++;
+  return shared / Math.min(a.size, b.size) >= 0.7;
 }
 
 /**
  * Per claim:
  * - Original = earliest dated source. Undated sources are never original.
- * - Citation signal in snippet + an original exists → chain joins the original, citesSourceId set.
- * - Same snippet opening as an earlier chain root → syndicated copy, joins that chain.
+ * - Citation signal in snippet + an original exists → joins the original, citesSourceId set.
+ * - Title matches an earlier chain root (same story) → syndicated copy, joins that chain.
  * - Otherwise → new independent chain (chainId = own id).
  * Export signatures unchanged.
  */
@@ -38,7 +48,6 @@ export function analyzeProvenance(sources: Source[]): Source[] {
   const out: Source[] = [];
 
   for (const group of byClaim.values()) {
-    // Dated sources first, ascending; undated last
     group.sort((a, b) => {
       if (!a.publishDate && !b.publishDate) return 0;
       if (!a.publishDate) return 1;
@@ -47,11 +56,12 @@ export function analyzeProvenance(sources: Source[]): Source[] {
     });
 
     const origin = group.find((s) => s.publishDate) ?? null;
-    const rootByFp = new Map<string, string>(); // fingerprint -> chain root id
+    const roots: { tokens: Set<string>; chainId: string }[] = [];
 
     for (const s of group) {
       s.citesSourceId = null;
       s.isOriginal = !!origin && s.id === origin.id;
+      const tokens = titleTokens(s);
 
       if (s.isOriginal) {
         s.chainId = s.id;
@@ -59,17 +69,13 @@ export function analyzeProvenance(sources: Source[]): Source[] {
         s.citesSourceId = origin.id;
         s.chainId = origin.id;
       } else {
-        const fp = fingerprint(s);
-        const existingRoot = fp ? rootByFp.get(fp) : undefined;
-        if (existingRoot) {
-          s.chainId = existingRoot;      // syndicated copy
-        } else {
-          s.chainId = s.id;              // new independent chain
-        }
+        const match = roots.find((r) => sameStory(r.tokens, tokens));
+        s.chainId = match ? match.chainId : s.id;
       }
 
-      const fp = fingerprint(s);
-      if (fp && !rootByFp.has(fp)) rootByFp.set(fp, s.chainId as string);
+      if (!roots.some((r) => r.chainId === s.chainId)) {
+        roots.push({ tokens, chainId: s.chainId as string });
+      }
 
       out.push(s);
     }
