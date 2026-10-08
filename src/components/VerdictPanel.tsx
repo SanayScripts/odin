@@ -1,4 +1,5 @@
 import type { ClaimResult, Verdict } from "@/lib/types";
+import { contestedLabel } from "@/lib/verdictLabel";
 
 const VERDICT_STYLE: Record<Verdict, { border: string; bg: string; text: string; label: string }> = {
   supported:   { border: "border-emerald-700", bg: "bg-emerald-950", text: "text-emerald-300", label: "✓ Supported" },
@@ -33,7 +34,7 @@ export default function VerdictPanel({
     <section className="space-y-4">
       <div className={`rounded-xl border p-5 ${v.border} ${v.bg}`}>
         <p className="text-xs uppercase tracking-wide opacity-60 mb-1">Overall verdict</p>
-        <p className={`text-2xl font-bold ${v.text}`}>{v.label}</p>
+        <p className={`text-2xl font-bold ${v.text}`}>{overall === "contested" && results.length === 1 ? contestedLabel(results[0]) : v.label}</p>
         <ConfidenceBar value={confidence} />
       </div>
 
@@ -47,7 +48,7 @@ export default function VerdictPanel({
             return (
               <div key={r.claimId} className="flex items-center gap-3 text-xs">
                 <span className="font-mono text-amber-500 w-6 shrink-0">C{i + 1}</span>
-                <span className={`rounded border px-2 py-0.5 font-semibold shrink-0 ${rv.border} ${rv.bg} ${rv.text}`}>{rv.label}</span>
+                <span className={`rounded border px-2 py-0.5 font-semibold shrink-0 ${rv.border} ${rv.bg} ${rv.text}`}>{r.verdict === "contested" ? contestedLabel(r) : rv.label}</span>
                 <div className="flex-1 flex items-center gap-2 text-zinc-500 min-w-0">
                   <span className="text-emerald-400">{r.support.toFixed(2)} sup</span>
                   <span className="text-red-400">{r.conflict.toFixed(2)} con</span>

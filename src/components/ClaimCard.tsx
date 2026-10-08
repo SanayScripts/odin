@@ -1,4 +1,5 @@
 import type { Claim, Source, ClaimResult, Verdict } from "@/lib/types";
+import { contestedLabel } from "@/lib/verdictLabel";
 
 const ENTITY_CHIP: Record<string, string> = {
   person: "border-sky-800 bg-sky-950 text-sky-300",
@@ -43,7 +44,7 @@ export default function ClaimCard({ index, claim, sources, warning, result }: {
         </div>
         {result && (
           <span className={`shrink-0 rounded-lg border px-3 py-1 text-xs font-semibold ${VERDICT_STYLE[result.verdict]}`}>
-            {VERDICT_LABEL[result.verdict]}
+            {result.verdict === "contested" ? contestedLabel(result) : VERDICT_LABEL[result.verdict]}
           </span>
         )}
       </div>
