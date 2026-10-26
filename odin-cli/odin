@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+D="$(dirname "$(readlink -f "$0")")"
+exec "$D/node_modules/.bin/tsx" --tsconfig "$D/tsconfig.json" --env-file="$D/.env.local" "$D/src/cli.ts" "$@"
