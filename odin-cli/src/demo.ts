@@ -58,10 +58,35 @@ const lemon: Fixture = {
   ], ["conflicts", "conflicts", "conflicts", "conflicts", "conflicts", "conflicts"]),
 };
 
+const TOI_URL = "https://timesofindia.indiatimes.com/city/bhopal/soviet-era-blueprints-decoded-jabalpur-factory-builds-indigenous-tank-overhaul-capability-to-repair-t-72-and-t-90-battle-tanks-annually-from-april-2028-with-a-rs-462-crore-facility-to-dismantle-rebuild-and-test-the-armys-soviet-origin-armoured-fleet/articleshow/135200894.cms";
+const jLoc = ["Jabalpur", "Madhya Pradesh"];
+const jClaims: Claim[] = [
+  { id: "c1", text: "Defence Minister Rajnath Singh laid the foundation stone for a ₹472-crore tank overhaul facility at Vehicle Factory Jabalpur.", entities: [{ name: "Rajnath Singh", type: "person" }, { name: "Vehicle Factory Jabalpur", type: "org" }], dates: ["2026-08-27"], locations: jLoc },
+  { id: "c2", text: "The Jabalpur facility will overhaul 80 T-72 and T-90 tanks annually.", entities: [{ name: "Vehicle Factory Jabalpur", type: "org" }], dates: [], locations: jLoc },
+  { id: "c3", text: "The Heavy Vehicles Factory at Avadi overhauls about 150 tanks a year.", entities: [{ name: "Heavy Vehicles Factory", type: "org" }], dates: [], locations: ["Avadi", "Tamil Nadu"] },
+];
+const jSpecs: Spec[] = [
+  { key: "hawk", url: "https://www.thehawk.in/news/india/rajnath-singh-lays-foundation-stone-for-t-72-t-90-tank-overhaul-facility-in-jabalpur", title: "Rajnath Singh lays foundation stone for T-72, T-90 tank overhaul facility in Jabalpur", outlet: "thehawk.in", date: "2026-08-27", tier: 3 },
+  { key: "week", url: "https://www.theweek.in/news/defence/2026/08/27/india-closes-tank-overhaul-gap-jabalpur-facility-to-add-capacity-for-80-t-72s-t-90s.html", title: "India closes tank overhaul gap: Jabalpur facility to add capacity for 80 T-72s, T-90s", outlet: "theweek.in", date: "2026-08-27", tier: 4 },
+  { key: "raksha", url: "https://www.rakshasamachar.com/defence-news/rajnath-singh-t-72-t-90-tank-overhaul-project-jabalpur-indian-army/", title: "Rajnath Singh launches Rs 472 crore T-72 and T-90 tank overhaul project in Jabalpur", outlet: "rakshasamachar.com", date: "2026-08-27", tier: 2 },
+  { key: "super", url: "https://superkalam.com/current-affairs/28-08-2026/rajnath-lays-foundation-for-tank-overhaul-facility-in-m-p-pg14-adf7d382-6206-4037-8522-92e1e862b313", title: "Rajnath lays foundation for tank overhaul facility in M.P.", outlet: "superkalam.com", date: "2026-08-28", tier: 2, cites: "hawk" },
+  { key: "gulf", url: "https://www.pressreader.com/uae/gulf-news/20260828/281818585687031", title: "Rajnath lays foundation for tank overhaul facility in M.P.", outlet: "pressreader.com", date: "2026-08-28", tier: 4, cites: "hawk" },
+  { key: "asian", url: "https://www.asianmilitaryreview.com/2026/09/india-enhances-overhaul-capacity-for-army-t-72-and-t-90-tanks-foc/", title: "India enhances overhaul capacity for army T-72 and T-90 tanks", outlet: "asianmilitaryreview.com", date: "2026-09", tier: 3 },
+];
+const jabalpur: Fixture = {
+  kind: "url", claims: jClaims,
+  sources: [
+    ...build("c1", jSpecs, [S, S, S, S, S, S]),
+    ...build("c2", jSpecs, [S, S, S, S, S, S]),
+    ...build("c3", jSpecs, [S, S, N, S, N, S]),
+  ],
+};
+
 const norm = (s: string) => s.trim().toLowerCase().replace(/\/+$/, "").replace(/[.!?\s]+$/, "");
 export function findFixture(input: string): Fixture | null {
   const n = norm(input);
   if (n === norm(REUTERS_URL)) return reuters;
+  if (n === norm(TOI_URL)) return jabalpur;
   if (n === "lemon tea cures covid" || n === "lemon tea cures covid-19") return lemon;
   return null;
 }
@@ -84,9 +109,18 @@ export async function playDemo(rail: Rail, fx: Fixture) {
     ["PROVENANCE", ["ordering by publish date", "curl · building link graph", "collapsing syndicated chains"], "original + citation chains found"],
     ["SCORE", ["weighting by tier × confidence × independence"], "verdicts computed"],
   ];
+  const DELAY: Record<string, number> = { INGEST: 2200, EXTRACT: 3000, RETRIEVE: 1500, RECON: 1500, CLASSIFY: 2500, PROVENANCE: 1800, SCORE: 1200 };
+  const PER_CLAIM = new Set(["RETRIEVE", "CLASSIFY"]);
+  const CLAIM_GAP = 1400;
   for (const [id, msgs, doneMsg] of plan) {
     rail.start(id, msgs[0]);
-    for (const m of msgs) { rail.set(id, m); await sleep(id === "RECON" ? 650 : 520); }
+    const base = DELAY[id] ?? 1000;
+    if (PER_CLAIM.has(id)) {
+      await sleep(base);
+      for (const m of msgs) { rail.set(id, m); await sleep(CLAIM_GAP); }
+    } else {
+      for (const m of msgs) { rail.set(id, m); await sleep(base / msgs.length); }
+    }
     rail.done(id, doneMsg);
   }
 }
